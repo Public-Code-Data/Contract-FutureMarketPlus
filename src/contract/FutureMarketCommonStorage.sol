@@ -16,8 +16,8 @@ library FutureMarketCommonStorage {
         uint256 rewardPerPoint;      // 单积分收益（18 位小数）
 
         // 下注记录（积分单位）
-        mapping(address => uint256) betA;
-        mapping(address => uint256) betB;
+        mapping(address => FutureMarketCommonStorage.Answer) userSide;
+        mapping(address => uint256) betAmounts;
         uint256 totalA;
         uint256 totalB;
 

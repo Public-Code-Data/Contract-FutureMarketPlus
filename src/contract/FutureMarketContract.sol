@@ -37,7 +37,6 @@ contract FutureMarketContract is
     );
     event Claimed(address indexed user, uint256 reward);
     event CommitteeChanged(address indexed oldAddr, address indexed newAddr);
-    event EmergencyWithdraw(address indexed token, uint256 amount);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -81,7 +80,6 @@ contract FutureMarketContract is
         s.resolutionTime = resolution;
     }
 
-    // ============ 统一签名下注入口 ============
     function betWithSignature(
         uint8 answerRaw, // 1=A, 2=B
         uint256 amount,
@@ -98,40 +96,53 @@ contract FutureMarketContract is
         require(block.timestamp <= deadline, "Expired");
         require(answerRaw == 1 || answerRaw == 2, "Invalid answer");
         require(amount > 0 && amount % BET_UNIT == 0, "Invalid amount");
-        address user = msg.sender;
 
+        address user = msg.sender;
         FutureMarketCommonStorage.Answer answer = answerRaw == 1
             ? FutureMarketCommonStorage.Answer.A
             : FutureMarketCommonStorage.Answer.B;
 
-        uint256 currentNonces = st.nonces[user];
-        bytes32 hash = hashTypedDataV4(
-            user,
-            answerRaw,
-            amount,
-            currentNonces,
-            deadline
+        // ========== 单边限制检查 ==========
+        if (st.userSide[user] != FutureMarketCommonStorage.Answer.Empty) {
+            // 已经下注过，必须与本次方向一致
+            require(st.userSide[user] == answer, "Cannot bet on both sides");
+        } else {
+            // 首次下注，记录方向
+            st.userSide[user] = answer;
+        }
+        // ==================================
+
+        uint256 currentNonce = st.nonces[user];
+
+        bytes32 structHash = keccak256(
+            abi.encode(
+                BET_TYPEHASH,
+                user,
+                answerRaw,
+                amount,
+                currentNonce,
+                deadline
+            )
         );
+        bytes32 hash = _hashTypedDataV4(structHash);
         require(ECDSA.recover(hash, v, r, s) == st.pointsSigner, "Invalid sig");
 
+        // 统一记录到 betAmounts，并更新总池子
+        st.betAmounts[user] += amount;
+
         if (answer == FutureMarketCommonStorage.Answer.A) {
-            st.betA[user] += amount;
             st.totalA += amount;
         } else {
-            st.betB[user] += amount;
             st.totalB += amount;
         }
 
         st.nonces[user]++;
 
-        emit Bet(user, answerRaw, amount, currentNonces);
+        emit Bet(user, answerRaw, amount, currentNonce);
     }
 
     // ============ 开奖（committee） ============
-    function resolve(
-        uint8 winningAnswerRaw, // 1=A, 2=B
-        uint256 rewardPerPoint
-    ) external {
+    function resolve(uint8 winningAnswerRaw, uint256 rewardPerPoint) external {
         FutureMarketCommonStorage.Layout storage st = FutureMarketCommonStorage
             .layout();
         require(msg.sender == st.committee, "Only committee");
@@ -152,10 +163,12 @@ contract FutureMarketContract is
     }
 
     // ============ 修改 committee ============
-    function setCommittee(address newCommittee) external onlyOwner {
+    function setCommittee(address newCommittee) external {
         require(newCommittee != address(0), "Zero address");
+
         FutureMarketCommonStorage.Layout storage st = FutureMarketCommonStorage
             .layout();
+        require(msg.sender == st.pointsSigner, "Invalid address");
         emit CommitteeChanged(st.committee, newCommittee);
         st.committee = newCommittee;
     }
@@ -166,13 +179,12 @@ contract FutureMarketContract is
             .layout();
         require(st.resolved, "Not resolved");
 
-        uint256 userBet = st.winningAnswer == FutureMarketCommonStorage.Answer.A
-            ? st.betA[msg.sender]
-            : st.betB[msg.sender];
+        require(st.userSide[msg.sender] == st.winningAnswer, "Not winner");
 
-        require(userBet > 0, "No winning bet");
+        uint256 userBet = st.betAmounts[msg.sender];
+        require(userBet > 0, "No bet");
 
-        uint256 reward = (userBet * st.rewardPerPoint) / 1e18;
+        uint256 reward = userBet * st.rewardPerPoint;
         require(reward > 0, "No reward");
         require(st.claimedReward[msg.sender] == 0, "Already claimed");
 
@@ -196,21 +208,20 @@ contract FutureMarketContract is
         } else {
             IERC20(token).safeTransfer(st.committee, amount);
         }
-
-        emit EmergencyWithdraw(token, amount);
     }
 
     // ============ 查看函数 ============
     function getPendingReward(address user) external view returns (uint256) {
         FutureMarketCommonStorage.Layout storage st = FutureMarketCommonStorage
             .layout();
-        if (!st.resolved || st.claimedReward[user] > 0) return 0;
-
-        uint256 bet = st.winningAnswer == FutureMarketCommonStorage.Answer.A
-            ? st.betA[user]
-            : st.betB[user];
-
-        return bet == 0 ? 0 : (bet * st.rewardPerPoint) / 1e18;
+        if (
+            !st.resolved ||
+            st.claimedReward[user] > 0 ||
+            st.userSide[user] != st.winningAnswer
+        ) {
+            return 0;
+        }
+        return st.betAmounts[user] * st.rewardPerPoint;
     }
 
     function hashTypedDataV4(
@@ -235,10 +246,14 @@ contract FutureMarketContract is
 
     function getUserBet(
         address user
-    ) external view returns (uint256 betA, uint256 betB) {
+    )
+        external
+        view
+        returns (uint256 amount, FutureMarketCommonStorage.Answer side)
+    {
         FutureMarketCommonStorage.Layout storage st = FutureMarketCommonStorage
             .layout();
-        return (st.betA[user], st.betB[user]);
+        return (st.betAmounts[user], st.userSide[user]);
     }
 
     function getPointsSigner() external view returns (address) {
@@ -301,17 +316,17 @@ contract FutureMarketContract is
         external
         view
         returns (
-            string memory,
-            string memory,
-            uint32,
-            uint32,
-            uint32,
-            bool,
-            FutureMarketCommonStorage.Answer,
-            uint256,
-            uint256,
-            uint256,
-            address
+            string memory name,
+            string memory symbol,
+            uint32 start,
+            uint32 end,
+            uint32 resolution,
+            bool isResolved,
+            FutureMarketCommonStorage.Answer winner,
+            uint256 rewardPerPoint,
+            uint256 totalA,
+            uint256 totalB,
+            address committee
         )
     {
         FutureMarketCommonStorage.Layout storage s = FutureMarketCommonStorage

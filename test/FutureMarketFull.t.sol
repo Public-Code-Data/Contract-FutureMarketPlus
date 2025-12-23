@@ -27,7 +27,10 @@ contract FutureMarketFullTest is Test {
     address constant POINTS_SIGNER =
         address(0xC565FC29F6df239Fe3848dB82656F2502286E97d); // 后端签名私钥地址
 
-    uint256 public pointsSignerPK = uint256(0x50e8cf2debf50b5659f034c2697975a734eea5eea36de8acdf38395ec354ee47); // 模拟后端私钥
+    uint256 public pointsSignerPK =
+        uint256(
+            0xA123
+        ); // 模拟签名地址后端私钥
 
     uint32 constant START = 1000;
     uint32 constant END = 2000;
@@ -106,10 +109,10 @@ contract FutureMarketFullTest is Test {
     function testGameBetWithSignature() public {
         _createGame(ALICE);
 
-        uint256 amount = 300; // 3 × 100 积分
+        uint256 amount = 300;
         uint256 deadline = block.timestamp + 1 hours;
 
-        // 模拟后端签名（A 方向）
+        // ALICE 下 A 方向
         bytes32 hash = game.hashTypedDataV4(
             ALICE,
             uint8(1),
@@ -119,19 +122,21 @@ contract FutureMarketFullTest is Test {
         );
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pointsSignerPK, hash);
 
-        // 任何人可提交（这里用 BOB 提交）
-        // vm.prank(ALICE);
-        vm.startPrank(ALICE);
+        vm.prank(ALICE);
         game.betWithSignature(1, amount, deadline, v, r, s);
 
-        (uint256 betA, uint256 betB) = game.getUserBet(ALICE);
-        assertEq(betA, 300);
-        assertEq(betB, 0);
+        (uint256 betAmounts, FutureMarketCommonStorage.Answer side) = game
+            .getUserBet(ALICE);
+        assertEq(betAmounts, 300);
+        assertEq(uint256(side), 1); // A = 1
         assertEq(game.totalBetA(), 300);
 
-        vm.stopPrank();
+        // ====================== BOB 测试单边限制 ======================
+
         vm.startPrank(BOB);
-        // 再次下注 B 方向
+
+        // BOB 首次下 B 方向（成功）
+        console.log("BOB first bet B side");
         hash = game.hashTypedDataV4(
             BOB,
             uint8(2),
@@ -140,73 +145,119 @@ contract FutureMarketFullTest is Test {
             deadline
         );
         (v, r, s) = vm.sign(pointsSignerPK, hash);
-
         game.betWithSignature(2, 200, deadline, v, r, s);
 
-        (betA, betB) = game.getUserBet(BOB);
-        assertEq(betA, 300);
-        assertEq(betB, 200);
+        (betAmounts, side) = game.getUserBet(BOB);
+        assertEq(betAmounts, 200);
+        assertEq(uint256(side), 2); // B = 2
+
+        // BOB 尝试下 A 方向 → 预期 revert
+        console.log("BOB try add A side - should revert");
+        hash = game.hashTypedDataV4(
+            BOB,
+            uint8(1),
+            200,
+            game.nonces(BOB),
+            deadline
+        );
+        (v, r, s) = vm.sign(pointsSignerPK, hash);
+
+        vm.expectRevert("Cannot bet on both sides"); // ← 必须在调用之前！
+        game.betWithSignature(1, 200, deadline, v, r, s);
+
+        // 如果上面没 revert，这里不会执行（测试失败）
+
+        // BOB 可以继续加注 B 方向（成功）
+        console.log("BOB can add more on B side");
+        hash = game.hashTypedDataV4(
+            BOB,
+            uint8(2),
+            300,
+            game.nonces(BOB),
+            deadline
+        );
+        (v, r, s) = vm.sign(pointsSignerPK, hash);
+        game.betWithSignature(2, 300, deadline, v, r, s);
+
+        (betAmounts, side) = game.getUserBet(BOB);
+        assertEq(betAmounts, 500); // 200 + 300
+        assertEq(uint256(side), 2);
+
         vm.stopPrank();
     }
 
     // // ==================== 测试开奖 + 领奖 ====================
 
-    // function testGameResolveAndClaim() public {
-    //     _createGame(ALICE);
+    function testGameResolveAndClaim() public {
+        _createGame(ALICE);
 
-    //     // Alice 下 300 A, 200 B
-    //     _signAndBet(ALICE, 1, 300);
-    //     _signAndBet(ALICE, 2, 200);
+        // ALICE 全下 A 方向 500
+        _signAndBet(ALICE, 1, 500);
 
-    //     // Bob 下 400 A
-    //     _signAndBet(BOB, 1, 400);
+        // BOB 全下 B 方向 700
+        _signAndBet(BOB, 2, 700);
 
-    //     vm.warp(REVEAL + 1);
+        vm.warp(REVEAL + 1);
 
-    //     // 委员会开奖：B 赢，单积分收益 1.8（即 1 积分得 1.8 积分奖励）
-    //     uint256 rewardPerPoint = 1.8 ether; // 1.8e18
+        // 委员会开奖：B 赢，单积分收益 1.8（即 1 积分得 1.8 积分奖励）
+        uint256 rewardPerPoint = 1.8 ether; // 1.8e18
+        vm.startPrank(COMMITTEE);
+        game.resolve(2, rewardPerPoint); // B 赢
 
-    //     vm.prank(COMMITTEE);
-    //     game.resolve(2, rewardPerPoint); // B 赢
+        // 检查待领奖励
+        assertEq(game.getPendingReward(ALICE), 0); // A 输 = 0
+        assertEq(game.getPendingReward(BOB), 700 * 1.8 ether); // 700 * 1.8 = 1260
 
-    //     // 检查待领奖励
-    //     assertEq(game.getPendingReward(ALICE), 200 * 1.8 ether); // 200 * 1.8 = 360
-    //     assertEq(game.getPendingReward(BOB), 0); // Bob 猜错
+        vm.stopPrank();
 
-    //     // Alice 领奖
-    //     vm.prank(ALICE);
-    //     game.claim();
+        // BOB 领奖
+        vm.startPrank(BOB);
 
-    //     // 再次查询应为 0
-    //     assertEq(game.getPendingReward(ALICE), 0);
+        game.claim();
 
-    //     // 不能重复领
-    //     vm.prank(ALICE);
-    //     vm.expectRevert("Already claimed");
-    //     game.claim();
-    // }
+        // 再次查询应为 0
+        assertEq(game.getPendingReward(BOB), 0);
 
-    // // ==================== 测试委员会更换 ====================
+        vm.stopPrank();
 
-    // function testChangeCommittee() public {
-    //     _createGame(ALICE);
+        // 不能重复领
+        vm.startPrank(BOB);
+        vm.expectRevert("Already claimed");
+        game.claim();
 
-    //     address newCommittee = address(
-    //         0xC565FC29F6df239Fe3848dB82656F2502286E97d
-    //     );
+        vm.stopPrank();
 
-    //     vm.prank(OWNER);
-    //     factory.setInitialCommittee(newCommittee); // 只影响后续市场
+        // ALICE 无奖励
+        vm.startPrank(ALICE);
 
-    //     // 当前市场仍为旧 committee
-    //     assertEq(game.getCommittee(), COMMITTEE);
+        vm.expectRevert("Not winner"); // 或 "No winning bet"，取决于您的 claim 检查顺序
+        game.claim();
+        vm.stopPrank();
+    }
 
-    //     // owner 可在单个市场内修改
-    //     vm.prank(OWNER);
-    //     game.setCommittee(newCommittee);
+    // ==================== 测试委员会更换 ====================
 
-    //     assertEq(game.getCommittee(), newCommittee);
-    // }
+    function testChangeCommittee() public {
+        _createGame(ALICE);
+
+        address newCommittee = address(0x1);
+
+        // 工厂设置只影响新市场
+        vm.startPrank(OWNER);
+        factory.setInitialCommittee(newCommittee);
+
+        // 当前市场仍为旧 committee
+        assertEq(game.getCommittee(), COMMITTEE);
+        vm.stopPrank();
+
+        // owner 可直接在市场合约修改
+        vm.startPrank(POINTS_SIGNER);
+
+        game.setCommittee(newCommittee);
+
+        assertEq(game.getCommittee(), newCommittee);
+        vm.stopPrank();
+    }
 
     // // ==================== 内部工具函数 ====================
 
@@ -228,30 +279,26 @@ contract FutureMarketFullTest is Test {
         vm.warp(START + 10);
         vm.stopPrank();
     }
+    function _signAndBet(
+        address user,
+        uint8 answerRaw,
+        uint256 amount
+    ) internal {
+        vm.startPrank(user);
+        uint256 deadline = block.timestamp + 1 hours;
 
-    // function _signAndBet(
-    //     address user,
-    //     uint8 answerRaw,
-    //     uint256 amount
-    // ) internal {
-    //     uint256 deadline = block.timestamp + 1 hours;
+        bytes32 hash = game.hashTypedDataV4(
+            user,
+            answerRaw,
+            amount,
+            game.nonces(user),
+            deadline
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pointsSignerPK, hash);
 
-    //     bytes32 structHash = keccak256(
-    //         abi.encode(
-    //             game.BET_TYPEHASH(),
-    //             user,
-    //             answerRaw,
-    //             amount,
-    //             game.nonces(user),
-    //             deadline
-    //         )
-    //     );
-    //     bytes32 hash = game.hashTypedDataV4(structHash);
-    //     (uint8 v, bytes32 r, bytes32 s) = vm.sign(pointsSignerPK, hash);
-
-    //     vm.prank(user); // 模拟用户提交
-    //     game.betWithSignature(user, answerRaw, amount, deadline, v, r, s);
-    // }
+        game.betWithSignature(answerRaw, amount, deadline, v, r, s);
+        vm.stopPrank();
+    }
 
     function _salt(address user, uint96 index) internal pure returns (bytes32) {
         return bytes32((uint256(uint160(user)) << 96) | index);

@@ -59,17 +59,13 @@ contract DeployFutureMarketSystem is Script {
         console.log("Current Implementation for type 0:", currentImpl);
         assert(currentImpl == address(marketImpl));
 
-        // ==================== Step 5: 示例预测地址（供前端参考） ====================
-        bytes32 exampleSalt = bytes32(uint256(uint160(deployer)) << 96); // 使用 deployer 地址作为 salt 前缀
-        address predictedMarket = factory.predictMarketAddress(0, exampleSalt);
-
+        
         console.log("");
         console.log("=== Deployment Summary ===");
         console.log("Factory Proxy:", factoryProxy);
         console.log("FutureMarketContract Implementation (v1):", address(marketImpl));
         console.log("Points Signer:", pointsSigner);
         console.log("Initial Committee:", initialCommittee);
-        console.log("Example Predicted Market Address (for deployer):", predictedMarket);
         console.log("");
         console.log("Next Step: Users can call createFutureMarket() with proper salt to create markets");
         console.log("Future Upgrades: Use upgradeMarketType(0, newImpl) to batch upgrade all type-0 markets");

@@ -5,8 +5,7 @@ import "@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
-import "@openzeppelin/contracts/proxy/Clones.sol";
-import "@openzeppelin/contracts/proxy/beacon/IBeacon.sol";
+import "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 
 import "./contract/FutureMarketContract.sol";
 
@@ -15,9 +14,6 @@ contract FutureMarketFactoryContract is
     OwnableUpgradeable,
     UUPSUpgradeable
 {
-    address constant MINIMAL_PROXY_TEMPLATE =
-        0x3f0091d31f1E3E0FC8b0e1C43e2e7eF4e8EF33e2;
-
     // 类型 -> Beacon
     mapping(uint256 => UpgradeableBeacon) public beacons;
 
@@ -27,14 +23,14 @@ contract FutureMarketFactoryContract is
     address public pointsSigner;
     address public initialCommittee;
 
-    event BeaconUpgraded(
-        uint256 indexed marketType,
-        address indexed newImplementation
-    );
+    event BeaconUpgraded(uint256 indexed marketType, address indexed newImplementation);
     event MarketCreated(
         address indexed market,
         address indexed owner,
-        uint256 tokenId
+        uint256 indexed tokenId,
+        uint256 marketType,
+        string name,
+        string symbol
     );
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -58,85 +54,51 @@ contract FutureMarketFactoryContract is
         initialCommittee = _initialCommittee;
 
         // 创建默认类型 0 的 Beacon
-        beacons[0] = new UpgradeableBeacon(
-            _initialImplementation,
-            address(this)
-        );
+        beacons[0] = new UpgradeableBeacon(_initialImplementation, address(this));
     }
 
+    /**
+     * @dev 创建新预测市场（使用官方 BeaconProxy，最稳定）
+     */
     function createFutureMarket(
         uint256 marketType,
-        bytes32 collectionId,
+        bytes32 collectionId, // 用于防抢注检查
         string calldata name,
         string calldata symbol,
         bytes calldata packedTimeData
     ) external returns (address market) {
-        if (address(bytes20(collectionId)) != msg.sender)
-            revert("Invalid caller");
+        // 防抢注：salt 前 20 字节必须是调用者
+        if (address(bytes20(collectionId)) != msg.sender) revert("Invalid caller");
 
         UpgradeableBeacon beacon = beacons[marketType];
         require(address(beacon) != address(0), "Invalid marketType");
 
-        // 正确：使用固定极简代理字节码地址作为 mother（OpenZeppelin 推荐）
-
-        market = Clones.cloneDeterministic(
-            MINIMAL_PROXY_TEMPLATE,
-            collectionId
-        );
-
-        // 合并初始化，减少局部变量
-        bytes memory payload = abi.encodeCall(
+        // 构造初始化数据
+        bytes memory initData = abi.encodeCall(
             FutureMarketContract.initialize,
             (name, symbol, initialCommittee, pointsSigner, packedTimeData)
         );
 
-        (bool success, ) = market.call(payload);
-        require(success, "Initialization failed");
+        // 使用官方 BeaconProxy 部署（安全、可靠、支持初始化）
+        market = address(new BeaconProxy(address(beacon), initData));
 
-        // 设置 Beacon 地址到 slot 0
-        // payload = abi.encodeWithSignature(
-        //     "setBeacon(address)",
-        //     address(beacon)
-        // );
-        assembly {
-            sstore(0, beacon) // 直接写入 storage slot 0
-        }
-        (success, ) = market.call(payload);
-        require(success, "Set beacon failed");
-
-        // Mint NFT + emit
         uint256 tokenId = uint256(uint160(market));
         _safeMint(msg.sender, tokenId);
         marketToTokenId[market] = tokenId;
 
-        // emit 保持不变（现在栈深度已安全）
-        emit MarketCreated(market, msg.sender, tokenId);
-    }
-    /**
-     * @dev 预测地址（使用固定极简代理字节码）
-     */
-    function predictMarketAddress(
-        uint256 marketType,
-        bytes32 collectionId
-    ) external view returns (address) {
-        require(address(beacons[marketType]) != address(0), "Invalid type");
-        return
-            Clones.predictDeterministicAddress(
-                MINIMAL_PROXY_TEMPLATE, // 同上固定地址
-                collectionId,
-                address(this)
-            );
+        emit MarketCreated(market, msg.sender, tokenId, marketType, name, symbol);
     }
 
+  
+
     /**
-     * @dev 升级指定类型的所有市场
+     * @dev 一键升级所有同类型市场
      */
-    function upgradeMarketType(
-        uint256 marketType,
-        address newImplementation
-    ) external onlyOwner {
+    function upgradeMarketType(uint256 marketType, address newImplementation) external onlyOwner {
+        require(newImplementation != address(0), "Invalid impl");
         UpgradeableBeacon beacon = beacons[marketType];
         require(address(beacon) != address(0), "Invalid type");
+
         beacon.upgradeTo(newImplementation);
         emit BeaconUpgraded(marketType, newImplementation);
     }
@@ -144,15 +106,9 @@ contract FutureMarketFactoryContract is
     /**
      * @dev 添加新市场类型
      */
-    function addMarketType(
-        uint256 marketType,
-        address implementation
-    ) external onlyOwner {
+    function addMarketType(uint256 marketType, address implementation) external onlyOwner {
         require(address(beacons[marketType]) == address(0), "Type exists");
-        beacons[marketType] = new UpgradeableBeacon(
-            implementation,
-            address(this)
-        );
+        beacons[marketType] = new UpgradeableBeacon(implementation, address(this));
     }
 
     // ============ 配置 ============
@@ -180,9 +136,7 @@ contract FutureMarketFactoryContract is
         return address(beacons[marketType]);
     }
 
-    function getImplementation(
-        uint256 marketType
-    ) external view returns (address) {
+    function getImplementation(uint256 marketType) external view returns (address) {
         return beacons[marketType].implementation();
     }
 }

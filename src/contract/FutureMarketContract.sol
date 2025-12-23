@@ -25,7 +25,12 @@ contract FutureMarketContract is
 
     uint256 public constant BET_UNIT = 100; // 100 积分单位
 
-    event Bet(address indexed user, bool indexed isA, uint256 amount);
+    event Bet(
+        address indexed user,
+        uint8 indexed answer,
+        uint256 amount,
+        uint256 nonces
+    );
     event Resolved(
         FutureMarketCommonStorage.Answer winningAnswer,
         uint256 rewardPerPoint
@@ -78,7 +83,6 @@ contract FutureMarketContract is
 
     // ============ 统一签名下注入口 ============
     function betWithSignature(
-        address user,
         uint8 answerRaw, // 1=A, 2=B
         uint256 amount,
         uint256 deadline,
@@ -94,22 +98,20 @@ contract FutureMarketContract is
         require(block.timestamp <= deadline, "Expired");
         require(answerRaw == 1 || answerRaw == 2, "Invalid answer");
         require(amount > 0 && amount % BET_UNIT == 0, "Invalid amount");
+        address user = msg.sender;
 
         FutureMarketCommonStorage.Answer answer = answerRaw == 1
             ? FutureMarketCommonStorage.Answer.A
             : FutureMarketCommonStorage.Answer.B;
 
-        bytes32 structHash = keccak256(
-            abi.encode(
-                BET_TYPEHASH,
-                user,
-                answerRaw,
-                amount,
-                st.nonces[user],
-                deadline
-            )
+        uint256 currentNonces = st.nonces[user];
+        bytes32 hash = hashTypedDataV4(
+            user,
+            answerRaw,
+            amount,
+            currentNonces,
+            deadline
         );
-        bytes32 hash = _hashTypedDataV4(structHash);
         require(ECDSA.recover(hash, v, r, s) == st.pointsSigner, "Invalid sig");
 
         if (answer == FutureMarketCommonStorage.Answer.A) {
@@ -122,7 +124,7 @@ contract FutureMarketContract is
 
         st.nonces[user]++;
 
-        emit Bet(user, answer == FutureMarketCommonStorage.Answer.A, amount);
+        emit Bet(user, answerRaw, amount, currentNonces);
     }
 
     // ============ 开奖（committee） ============
@@ -212,8 +214,22 @@ contract FutureMarketContract is
     }
 
     function hashTypedDataV4(
-        bytes32 structHash
-    ) external view returns (bytes32) {
+        address user,
+        uint8 answerRaw,
+        uint256 amount,
+        uint256 currentNonces,
+        uint256 deadline
+    ) public view returns (bytes32) {
+        bytes32 structHash = keccak256(
+            abi.encode(
+                BET_TYPEHASH,
+                user,
+                answerRaw,
+                amount,
+                currentNonces,
+                deadline
+            )
+        );
         return _hashTypedDataV4(structHash);
     }
 
@@ -225,9 +241,14 @@ contract FutureMarketContract is
         return (st.betA[user], st.betB[user]);
     }
 
+    function getPointsSigner() external view returns (address) {
+        return FutureMarketCommonStorage.layout().pointsSigner;
+    }
+
     function getCommittee() external view returns (address) {
         return FutureMarketCommonStorage.layout().committee;
     }
+
     function marketName() external view returns (string memory) {
         return FutureMarketCommonStorage.layout().marketName;
     }

@@ -123,7 +123,7 @@ contract FutureMarketFullTest is Test {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pointsSignerPK, hash);
 
         vm.prank(ALICE);
-        game.betWithSignature(1, amount, deadline, v, r, s);
+        game.bet(1, amount, deadline, v, r, s);
 
         (uint256 betAmounts, FutureMarketCommonStorage.Answer side) = game
             .getUserBet(ALICE);
@@ -145,7 +145,7 @@ contract FutureMarketFullTest is Test {
             deadline
         );
         (v, r, s) = vm.sign(pointsSignerPK, hash);
-        game.betWithSignature(2, 200, deadline, v, r, s);
+        game.bet(2, 200, deadline, v, r, s);
 
         (betAmounts, side) = game.getUserBet(BOB);
         assertEq(betAmounts, 200);
@@ -163,7 +163,7 @@ contract FutureMarketFullTest is Test {
         (v, r, s) = vm.sign(pointsSignerPK, hash);
 
         vm.expectRevert("Cannot bet on both sides"); // ← 必须在调用之前！
-        game.betWithSignature(1, 200, deadline, v, r, s);
+        game.bet(1, 200, deadline, v, r, s);
 
         // 如果上面没 revert，这里不会执行（测试失败）
 
@@ -177,7 +177,7 @@ contract FutureMarketFullTest is Test {
             deadline
         );
         (v, r, s) = vm.sign(pointsSignerPK, hash);
-        game.betWithSignature(2, 300, deadline, v, r, s);
+        game.bet(2, 300, deadline, v, r, s);
 
         (betAmounts, side) = game.getUserBet(BOB);
         assertEq(betAmounts, 500); // 200 + 300
@@ -296,7 +296,7 @@ contract FutureMarketFullTest is Test {
         );
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pointsSignerPK, hash);
 
-        game.betWithSignature(answerRaw, amount, deadline, v, r, s);
+        game.bet(answerRaw, amount, deadline, v, r, s);
         vm.stopPrank();
     }
 

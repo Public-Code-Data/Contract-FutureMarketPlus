@@ -80,7 +80,14 @@ contract FutureMarketContract is
         s.resolutionTime = resolution;
     }
 
-    function betWithSignature(
+    function updateTime(bytes calldata packedTime) external {
+        FutureMarketCommonStorage.Layout storage st = FutureMarketCommonStorage
+            .layout();
+        require(msg.sender == st.committee, "Only committee");
+        _initTimes(packedTime);
+    }
+
+    function bet(
         uint8 answerRaw, // 1=A, 2=B
         uint256 amount,
         uint256 deadline,

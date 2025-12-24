@@ -89,8 +89,6 @@ contract FutureMarketFactoryContract is
         emit MarketCreated(market, msg.sender, tokenId, marketType, name, symbol);
     }
 
-  
-
     /**
      * @dev 一键升级所有同类型市场
      */
@@ -138,5 +136,10 @@ contract FutureMarketFactoryContract is
 
     function getImplementation(uint256 marketType) external view returns (address) {
         return beacons[marketType].implementation();
+    }
+
+
+    function salt(address user, uint96 index) public pure returns (bytes32) {
+        return bytes32((uint256(uint160(user)) << 96) | index);
     }
 }

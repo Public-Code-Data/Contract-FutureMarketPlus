@@ -300,7 +300,7 @@ contract FutureMarketFullTest is Test {
         vm.stopPrank();
     }
 
-    function _salt(address user, uint96 index) internal pure returns (bytes32) {
-        return bytes32((uint256(uint160(user)) << 96) | index);
+    function _salt(address user, uint96 index) internal view returns (bytes32) {
+        return factory.salt(user, index);
     }
 }

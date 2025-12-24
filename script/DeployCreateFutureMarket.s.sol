@@ -14,8 +14,6 @@ contract DeployCreateFutureMarket is Script {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
 
-        address deployer = vm.addr(deployerPrivateKey);
-
         console.log("Deployer address:", deployer);
         console.log("Deployer balance:", deployer.balance / 1e18, "ETH");
 

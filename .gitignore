@@ -1,0 +1,28 @@
+# Foundry
+cache/
+out/
+broadcast/
+
+# 环境变量和私钥（最重要！）
+.env
+.env.local
+.env.* 
+
+# 私钥文件
+*.pem
+*.key
+
+# 日志和临时文件
+*.log
+*.tmp
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# 其他
+node_modules/
+dist/

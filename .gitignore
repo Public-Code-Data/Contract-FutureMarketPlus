@@ -2,6 +2,9 @@
 cache/
 out/
 broadcast/
+abi/
+bin/
+depoly/
 
 # 环境变量和私钥（最重要！）
 .env

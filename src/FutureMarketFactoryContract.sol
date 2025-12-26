@@ -67,7 +67,8 @@ contract FutureMarketFactoryContract is
         string calldata symbol,
         bytes calldata packedTimeData
     ) external returns (address market) {
-        // 防抢注：salt 前 20 字节必须是调用者
+        // 防抢注：collectionId 前 20 字节必须是调用者地址（有意使用 bytes20 截断）
+        // forge-lint: disable-next-line(unsafe-typecast)
         if (address(bytes20(collectionId)) != msg.sender) revert("Invalid caller");
 
         UpgradeableBeacon beacon = beacons[marketType];
@@ -124,6 +125,7 @@ contract FutureMarketFactoryContract is
     function burnOwnership(uint256 tokenId) external {
         require(ownerOf(tokenId) == msg.sender, "Not owner");
         _burn(tokenId);
+        // forge-lint: disable-next-line(unsafe-typecast)
         delete marketToTokenId[address(uint160(tokenId))];
     }
 
